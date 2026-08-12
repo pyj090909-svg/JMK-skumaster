@@ -1,0 +1,9 @@
+﻿# 원본 ERP 데이터 및 분석 산출물 — 사내 자료로 저장소에 올리지 않음
+CODE현황.xlsx
+~$*.xlsx
+분석_*.csv
+
+# 기획 문서 (사내 문서)
+sku_master_dashboard_plan_*.md
+
+.claude/
