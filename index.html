@@ -54,8 +54,12 @@ body{
 .wrap{max-width:1400px;margin:0 auto}
 
 /* header */
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;margin-bottom:6px}
-h1{font-size:21px;font-weight:700;letter-spacing:-.02em}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+  margin-bottom:16px;padding-bottom:13px;border-bottom:2px solid var(--bd)}
+h1{font-size:24px;font-weight:800;letter-spacing:-.03em;display:flex;align-items:center;gap:12px}
+h1::before{content:'';flex:none;width:5px;height:27px;border-radius:3px;
+  background:linear-gradient(180deg,var(--brand),var(--ac))}
+h1 em{font-style:normal;color:var(--ac)}
 .logo{flex:none;font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   font-weight:800;font-size:19px;line-height:1;letter-spacing:.055em;
   color:var(--tx);white-space:nowrap;user-select:none}
@@ -202,7 +206,7 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
 <div class="wrap">
 
 <header>
-  <h1>자민경 SKU 코드 현황 대시보드</h1>
+  <h1><span>자민경 <em>SKU</em> Mater View</span></h1>
   <div class="logo" role="img" aria-label="자민경">JAMINKYUNG</div>
 </header>
 
