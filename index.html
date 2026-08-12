@@ -50,9 +50,8 @@ body{
 .wrap{max-width:1400px;margin:0 auto}
 
 /* header */
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:6px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;justify-content:space-between;margin-bottom:6px}
 h1{font-size:21px;font-weight:700;letter-spacing:-.02em}
-.sub{color:var(--tx2);font-size:12.5px;margin-top:3px}
 .logo{flex:none;font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   font-weight:800;font-size:19px;line-height:1;letter-spacing:.055em;
   color:var(--tx);white-space:nowrap;user-select:none}
@@ -92,6 +91,7 @@ h1{font-size:21px;font-weight:700;letter-spacing:-.02em}
   background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:7px;
   padding:7px 10px;font-size:12.5px;font-family:inherit;min-width:135px}
 .filters input[type=search]{flex:1;min-width:165px}
+.filters input[type=search]::placeholder{color:var(--tx3);font-style:italic;opacity:.55;font-weight:400}
 .andtag{flex:none;font-size:10.5px;font-weight:700;color:var(--tx3);letter-spacing:.08em;
   padding:0 2px;user-select:none}
 .filters input:focus,.filters select:focus{outline:2px solid var(--ac);outline-offset:-1px;border-color:var(--ac)}
@@ -177,13 +177,7 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
 <div class="wrap">
 
 <header>
-  <div>
-    <h1>자민경 SKU 코드 현황 대시보드</h1>
-    <div class="sub">
-      데이터 출처: <code>CODE현황.xlsx</code> · 품목등록 시트 전수 1,041건 ·
-      기준일 2026-08-12 · 기획서 v1.1 기준
-    </div>
-  </div>
+  <h1>자민경 SKU 코드 현황 대시보드</h1>
   <div class="logo" role="img" aria-label="자민경">JAMINKYUNG</div>
 </header>
 
