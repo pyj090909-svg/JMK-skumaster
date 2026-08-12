@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>자민경 SKU 코드 현황 대시보드</title>
+<title>자민경 SKU Master View</title>
 <style>
 :root{
   --bg:#ffffff; --panel:#ffffff; --panel2:#fafbfc; --bd:#e6e9ee;
@@ -234,7 +234,7 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
 <div class="wrap">
 
 <header>
-  <h1><span>자민경 <em>SKU</em> Mater View</span></h1>
+  <h1><span>자민경 <em>SKU</em> Master View</span></h1>
   <div class="logo" role="img" aria-label="자민경">JAMINKYUNG</div>
 </header>
 
@@ -695,13 +695,17 @@ function deriveRecords(raws) {
     else if (BRAND_MAP[p]) br = BRAND_MAP[p];
     else if (/^\d{5}$/.test(c)) br = '무형/회계';
     else br = '기타·예외';
+    // 단종으로 "명시된" 값만 단종 처리하고 나머지(공란 포함)는 운영으로 본다.
+    // 전수 재점검 전까지는 모두 운영으로 갈음하기로 했고, 이렇게 해야 표기가 다른 파일을
+    // 올렸을 때 기본 필터(운영)에서 행이 조용히 사라지는 일이 없다.
     const use = String(r.in_use ?? '').trim().toUpperCase();
+    const OFF = ['NO', 'N', 'FALSE', '0', 'X', '미사용', '단종', '중단'];
     return {
       c, n: String(r.item_name ?? ''), t, b: String(r.barcode ?? '').trim(),
       p, br, pa, m,
       x: (/^B\d+$/.test(m) && t !== '부재료') ? 1 : 0, d: 0,
       g: String(r.spec ?? ''),
-      s: use === 'YES' ? '운영' : use === 'NO' ? '단종' : '',
+      s: OFF.includes(use) ? '단종' : '운영',
       mf: String(r.manufacturer ?? ''), lt: String(r.lead_time ?? ''),
     };
   }).filter(Boolean);
