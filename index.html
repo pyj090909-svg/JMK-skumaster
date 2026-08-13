@@ -318,10 +318,13 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
 </aside>
 
 <footer>
-  본 대시보드는 기획서 <code>sku_master_dashboard_plan_4.md</code> (v1.1) 3장 설계를 기준으로 제작한 프로토타입입니다.<br>
-  「정제 대상」은 코드가 <code>-B0XX</code>(부재료 패턴)인데 품목구분이 [부재료]가 아닌 건으로, 기획서 8.1 규칙 R-1의 적용 대상입니다.
-  마이그레이션 시점에 일괄 정정될 예정이며 현재 원본은 수정되지 않았습니다.<br>
-  「바코드 중복」은 원인 확인 전이므로(기획서 7.3) 오류 여부가 확정되지 않았습니다. 채널 파생·리뉴얼로 인한 정상 공유가 다수 포함되어 있습니다.
+  <b>「정제 대상」</b> — 코드가 <code>-B0XX</code>(부재료 패턴)인데 품목구분이 [부재료]가 아닌 건입니다.
+  원본 데이터를 수정하지 않고 표시만 하며, ERP 데이터가 정정되면 자동으로 해소됩니다.<br>
+  <b>「바코드 중복」</b> — 같은 바코드를 쓰는 SKU는 바코드 칸이 하나로 병합되어 보입니다.
+  채널 파생·리뉴얼로 인한 정상 공유가 다수 포함되어 있어, 오류 여부는 확인 전입니다.<br>
+  <b>「운영/단종」</b> — 「사용」 값이 NO로 명시된 건만 단종이며, 비어 있으면 운영으로 처리합니다.<br>
+  데이터는 <b>엑셀 업로드 시점에 전체가 교체</b>되며, 교체 직전 상태는 자동으로 백업됩니다.
+  업로드는 우측 상단 로고를 더블클릭해 진행하고, 표준 양식은 「양식 다운로드」로 받으실 수 있습니다.
 </footer>
 
 </div>
@@ -537,11 +540,11 @@ function detail(code) {
 
   if (r.x) h += `<div class="dupbox" style="background:var(--warn-bg);border-left-color:var(--warn)">
     <b>정제 대상</b> — 코드가 부재료 패턴(<code>${esc(r.m)}</code>)인데 품목구분이 <b>${esc(r.t)}</b>로 되어 있습니다.
-    <div>기획서 8.1 규칙 R-1에 따라 마이그레이션 시 <b>[부재료]</b>로 정정될 예정입니다.</div></div>`;
+    <div>원본은 수정하지 않고 표시만 합니다. ERP에서 <b>[부재료]</b>로 정정된 뒤 업로드하면 자동으로 해소됩니다.</div></div>`;
 
   if (dupes.length) h += `<div class="dupbox"><b>바코드 공유 ${dupes.length + 1}건</b> — 같은 바코드를 쓰는 다른 SKU가 있습니다.
     ${dupes.map(o => `<div>· <span class="mono">${esc(o.c)}</span> ${esc(o.n)}</div>`).join('')}
-    <div style="margin-top:6px;color:var(--tx3)">원인 확인 전입니다(기획서 7.3). 채널 파생·리뉴얼이면 정상입니다.</div></div>`;
+    <div style="margin-top:6px;color:var(--tx3)">채널 파생·리뉴얼로 같은 바코드를 쓰는 경우가 많아, 오류 여부는 확인 전입니다.</div></div>`;
 
   if (parent) h += `<div class="bom"><h3>상위 완제품</h3><div class="bomlist">
     <div class="bomrow"><span class="bc mono">${esc(parent.c)}</span><span class="bn">${esc(parent.n)}</span></div></div></div>`;
@@ -674,8 +677,8 @@ function gridToObjects(grid) {
 }
 
 /* --- 엑셀 행 → DB 컬럼 형태 ---
-   '구매처명'은 의도적으로 매핑하지 않는다. 벤더 정보는 대외비이며(기획서 1.3.3)
-   이 대시보드는 Public 이므로 자동으로 채워지면 안 된다. */
+   '구매처명'은 의도적으로 매핑하지 않는다. 벤더 정보는 대외비이고 이 대시보드는
+   공개되어 있으므로, 제조사 열은 명시적으로 '제조사' 컬럼을 넣었을 때만 채워져야 한다. */
 function toRaw(o) {
   const pick = (...names) => { for (const n of names) if (o[n] !== undefined) return String(o[n] ?? '').trim(); return ''; };
   return {
