@@ -706,6 +706,7 @@ function toRaw(o) {
     barcode:      pick('바코드'),
     item_name:    pick('품목명', '제품명'),
     item_type:    pick('품목구분', '구분').replace(/[\[\]]/g, ''),
+    brand:        pick('브랜드', '브랜드명'),
     spec:         pick('규격정보', '규격'),
     in_use:       pick('사용', '사용여부'),
     manufacturer: pick('제조사'),
@@ -723,12 +724,16 @@ function deriveRecords(raws) {
     const pa = mm ? mm[1] : '', m = mm ? mm[2] : '';
     const base = pa || c;
     const pm = base.match(/^([A-Z]+)/), p = pm ? pm[1] : '';
-    let br;
-    if (p === 'E') br = E_MAP[base] || '기타(E)';
-    else if (p === 'PCCUPS') br = '크레마카라콜';
-    else if (BRAND_MAP[p]) br = BRAND_MAP[p];
-    else if (/^\d{5}$/.test(c)) br = '무형/회계';
-    else br = '기타·예외';
+    // 저장된 브랜드가 있으면 그대로 쓰고, 비어 있을 때만 접두문자로 추정한다.
+    // 이렇게 해야 신규 브랜드를 엑셀로 관리할 수 있고, 기존 데이터도 그대로 동작한다.
+    let br = String(r.brand ?? '').trim();
+    if (!br) {
+      if (p === 'E') br = E_MAP[base] || '기타(E)';
+      else if (p === 'PCCUPS') br = '크레마카라콜';
+      else if (BRAND_MAP[p]) br = BRAND_MAP[p];
+      else if (/^\d{5}$/.test(c)) br = '무형/회계';
+      else br = '기타·예외';
+    }
     // 단종으로 "명시된" 값만 단종 처리하고 나머지(공란 포함)는 운영으로 본다.
     // 전수 재점검 전까지는 모두 운영으로 갈음하기로 했고, 이렇게 해야 표기가 다른 파일을
     // 올렸을 때 기본 필터(운영)에서 행이 조용히 사라지는 일이 없다.
@@ -741,6 +746,7 @@ function deriveRecords(raws) {
       g: String(r.spec ?? ''),
       s: OFF.includes(use) ? '단종' : '운영',
       mf: String(r.manufacturer ?? ''), lt: String(r.lead_time ?? ''),
+      u: String(r.updated_at ?? ''),   // DB 수정일시 — 표시에는 쓰지 않고 양식 참조 시트에서 사용
     };
   }).filter(Boolean);
 
@@ -756,7 +762,7 @@ function deriveRecords(raws) {
 const SB_URL  = 'https://fpgqcgvbqaqnohmgznpq.supabase.co';
 const SB_KEY  = 'sb_publishable_K6P6PIhvg-hSXYNs0U-NVA_e3QMlbwt';
 const SB_HDR  = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' };
-const SB_COLS = 'sku_code,barcode,item_name,item_type,spec,in_use,manufacturer,lead_time';
+const SB_COLS = 'sku_code,barcode,item_name,item_type,spec,in_use,manufacturer,lead_time,brand,updated_at';
 
 // PostgREST 는 한 응답에 최대 1000행만 주므로 Range 헤더로 나눠 받는다
 async function sbFetchAll() {
@@ -855,6 +861,15 @@ async function loadFile(file) {
       : gridToObjects(await parseXlsx(await file.arrayBuffer()));
     const raws = objs.map(toRaw).filter(r => r.sku_code);
     if (!raws.length) throw new Error('품목코드가 있는 행이 없습니다');
+
+    // 열이 한 칸씩 밀린 파일을 DB에 반영하기 전에 걸러낸다.
+    // 실제로 브랜드명이 품목구분 자리에 들어와 전체 데이터가 덮어써진 사고가 있었다.
+    const VALID_TYPES = ['제품', '원재료', '부재료', '무형상품', '상품'];
+    const ok = raws.filter(r => VALID_TYPES.includes(r.item_type)).length;
+    if (ok / raws.length < 0.5) {
+      const sample = [...new Set(raws.map(r => r.item_type).filter(Boolean))].slice(0, 4).join(', ') || '(빈 값)';
+      throw new Error(`품목구분 열이 올바르지 않습니다 — ${raws.length}행 중 ${ok}행만 인식. 읽힌 값: ${sample}. 열이 밀렸는지 확인해 주세요`);
+    }
     const r = await sbReplace(raws, file.name);
     toast(`✓ DB에 ${Number(r.inserted).toLocaleString()}행 반영 — 접속하는 모든 사람에게 적용됩니다`);
     await refreshFromDB(true);
@@ -881,27 +896,37 @@ const CRC_TAB = (() => {
 })();
 const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TAB[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
 
-function zipStore(files) {
+// 참조 시트에 1,000행이 넘게 들어가므로 가능하면 deflate 로 압축한다(무압축 시 800KB 가까이 됨)
+async function zipBuild(files) {
   const enc = new TextEncoder(), parts = [], central = [];
+  const canDeflate = typeof CompressionStream === 'function';
   let offset = 0;
   for (const f of files) {
-    const nm = enc.encode(f.name), crc = crc32(f.data), len = f.data.length;
+    const nm = enc.encode(f.name), raw = f.data, crc = crc32(raw);
+    let data = raw, method = 0;
+    if (canDeflate && raw.length > 512) {
+      try {
+        const cs = new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+        const out = new Uint8Array(await new Response(cs).arrayBuffer());
+        if (out.length < raw.length) { data = out; method = 8; }
+      } catch { /* 압축 실패 시 무압축으로 진행 */ }
+    }
     const lh = new Uint8Array(30 + nm.length), lv = new DataView(lh.buffer);
     lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
-    lv.setUint16(8, 0, true); lv.setUint32(14, crc, true);
-    lv.setUint32(18, len, true); lv.setUint32(22, len, true);
+    lv.setUint16(8, method, true); lv.setUint32(14, crc, true);
+    lv.setUint32(18, data.length, true); lv.setUint32(22, raw.length, true);
     lv.setUint16(26, nm.length, true);
     lh.set(nm, 30);
-    parts.push(lh, f.data);
+    parts.push(lh, data);
 
     const ch = new Uint8Array(46 + nm.length), cv = new DataView(ch.buffer);
     cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
-    cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true);
-    cv.setUint32(16, crc, true); cv.setUint32(20, len, true); cv.setUint32(24, len, true);
+    cv.setUint16(8, 0x0800, true); cv.setUint16(10, method, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, raw.length, true);
     cv.setUint16(28, nm.length, true); cv.setUint32(42, offset, true);
     ch.set(nm, 46);
     central.push(ch);
-    offset += lh.length + len;
+    offset += lh.length + data.length;
   }
   const cdSize = central.reduce((a, c) => a + c.length, 0);
   const eo = new Uint8Array(22), ev = new DataView(eo.buffer);
@@ -918,17 +943,37 @@ const TEMPLATE_COLS = [
   ['바코드',    'barcode',      '13자리 등 · 텍스트로 입력'],
   ['품목명',    'item_name',    ''],
   ['품목구분',  'item_type',    '제품 / 원재료 / 부재료 / 무형상품 / 상품'],
+  ['브랜드',    'brand',        '비우면 SKU코드 앞글자로 자동 추정'],
   ['규격정보',  'spec',         '치수·재질 등'],
   ['사용',      'in_use',       'YES 또는 NO · 비우면 운영으로 처리'],
   ['제조사',    'manufacturer', ''],
   ['리드타임',  'lead_time',    '일(day) 단위'],
+  ['수정일시',  'updated_at',   'DB가 자동 기록 · 업로드 시 무시됨'],
 ];
 
-function buildTemplateXlsx() {
+async function buildTemplateXlsx() {
   const enc = new TextEncoder();
-  const X = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const X = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+                                .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
   const col = i => { let s = '', n = i + 1; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
   const cell = (c, r, v, st) => `<c r="${col(c)}${r}" t="inlineStr" s="${st}"><is><t xml:space="preserve">${X(v)}</t></is></c>`;
+
+  // 2번째 시트에 넣을 현재 DB 데이터. 조회에 실패하면 화면 데이터를 되돌려 사용한다.
+  let snapshot = [];
+  try {
+    snapshot = await sbFetchAll();
+  } catch {
+    snapshot = DATA.map(r => ({
+      sku_code: r.c, barcode: r.b, item_name: r.n, item_type: r.t,
+      spec: r.g, in_use: r.s === '단종' ? 'NO' : 'YES',
+      manufacturer: r.mf, lead_time: r.lt, brand: r.br, updated_at: r.u,
+    }));
+  }
+  const KEYS = TEMPLATE_COLS.map(c => c[1]);
+  // 타임스탬프는 ISO 원문 대신 읽기 쉬운 형태로
+  const fmtTs = v => { if (!v) return ''; const d = new Date(v); if (isNaN(d)) return String(v);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 
   // 안내문과 열 설명은 머리글 "위"에 둔다.
   // 업로드 파서는 '품목코드'가 있는 행을 머리글로 잡고 그 아래만 데이터로 읽으므로,
@@ -943,32 +988,53 @@ function buildTemplateXlsx() {
   const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="${TEMPLATE_COLS.length}" width="22" style="2" customWidth="1"/></cols><sheetData>${rows}</sheetData></worksheet>`;
 
+  // 2번째 시트 — 다운로드 시점의 DB 전체 (업로드에는 쓰이지 않는 참조용)
+  const stamp = new Date().toLocaleString('ko-KR');
+  const ref = [
+    `<row r="1">${cell(0, 1, `다운로드 시점(${stamp})의 DB 데이터 ${snapshot.length.toLocaleString()}행입니다. 업데이트 직전 상태를 확인하는 참조용이며, 업로드 시에는 사용되지 않습니다.`, 3)}</row>`,
+    `<row r="2">${TEMPLATE_COLS.map(([h], i) => cell(i, 2, h, 1)).join('')}</row>`,
+    ...snapshot.map((o, n) =>
+      `<row r="${n + 3}">${KEYS.map((k, i) =>
+        cell(i, n + 3, k === 'updated_at' ? fmtTs(o[k]) : o[k], 2)).join('')}</row>`),
+  ].join('');
+
+  const sheet2 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><tabColor rgb="FF8B97A6"/></sheetPr><cols><col min="1" max="${TEMPLATE_COLS.length}" width="22" style="2" customWidth="1"/></cols><sheetData>${ref}</sheetData></worksheet>`;
+
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="@"/></numFmts><fonts count="3"><font><sz val="11"/><name val="맑은 고딕"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font><font><sz val="10"/><color rgb="FF8B97A6"/><name val="맑은 고딕"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC04478"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="2" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs></styleSheet>`;
 
   const files = [
-    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
+    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
     ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
-    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="품목등록" sheetId="1" r:id="rId1"/></sheets></workbook>`],
-    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="품목등록" sheetId="1" r:id="rId1"/><sheet name="직전버전(참조용)" sheetId="2" r:id="rId2"/></sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
     ['xl/styles.xml', styles],
     ['xl/worksheets/sheet1.xml', sheet],
+    ['xl/worksheets/sheet2.xml', sheet2],
   ].map(([name, xml]) => ({ name, data: enc.encode(xml) }));
 
-  return zipStore(files);
+  return { blob: await zipBuild(files), rows: snapshot.length };
 }
 
-document.getElementById('btnTemplate').onclick = e => {
+document.getElementById('btnTemplate').onclick = async e => {
   e.stopPropagation();   // 상자 클릭(=파일 선택창 열기)까지 함께 발동하지 않도록
+  const btn = e.currentTarget, label = btn.textContent;
   try {
-    const url = URL.createObjectURL(buildTemplateXlsx());
+    btn.textContent = '⏳ 생성 중…'; btn.disabled = true;
+    const { blob, rows } = await buildTemplateXlsx();
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    const name = `SKU_Master_업로드양식_${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}.xlsx`;
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'SKU_Master_업로드양식.xlsx';
+    a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    toast('⤓ 업로드 양식을 내려받았습니다');
+    toast(`⤓ 양식을 내려받았습니다 — 2번째 시트에 현재 ${rows.toLocaleString()}행이 함께 담겼습니다`);
   } catch (err) {
     toast('양식 생성 실패: ' + err.message, true);
+  } finally {
+    btn.textContent = label; btn.disabled = false;
   }
 };
 
@@ -994,6 +1060,8 @@ addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', e => e.preventDefault());
 
 /* ---------- 엑셀 복사 ---------- */
+/* 화면 테이블에 보이는 열을 그대로 복사한다 (업로드용이 아니라 공유·분석용).
+   업로드에 쓰는 전체 열은 「표준 양식 다운로드」의 시트로 받는다. */
 const COLS = [
   ['바코드',    r => r.b],
   ['SKU코드',   r => r.c],
