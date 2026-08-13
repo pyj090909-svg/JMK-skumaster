@@ -60,9 +60,11 @@ h1{font-size:24px;font-weight:800;letter-spacing:-.03em;display:flex;align-items
 h1::before{content:'';flex:none;width:5px;height:27px;border-radius:3px;
   background:linear-gradient(180deg,var(--brand),var(--ac))}
 h1 em{font-style:normal;color:var(--ac)}
+h1 small{font-size:11.5px;font-weight:500;color:var(--tx3);letter-spacing:0;margin-left:4px;
+  white-space:nowrap;vertical-align:2px}
 .logo{flex:none;font-family:"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   font-weight:800;font-size:19px;line-height:1;letter-spacing:.055em;
-  color:var(--tx);white-space:nowrap;user-select:none}
+  color:var(--tx);white-space:nowrap;user-select:none;cursor:pointer}
 
 /* kpi */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:11px;margin:16px 0 18px}
@@ -234,8 +236,9 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
 <div class="wrap">
 
 <header>
-  <h1><span>자민경 <em>SKU</em> Master View</span></h1>
-  <div class="logo" role="img" aria-label="자민경">JAMINKYUNG</div>
+  <h1><span>자민경 <em>SKU</em> Master View <small id="upd"></small></span></h1>
+  <div class="logo" id="logo" role="img" aria-label="자민경"
+       title="더블클릭하면 엑셀 업로드 창이 열립니다">JAMINKYUNG</div>
 </header>
 
 <div class="srcbar" id="srcbar" hidden>
@@ -264,6 +267,7 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
     <span class="hact">
       <span class="seg seg-sm" id="segStatus" role="group" aria-label="운영/단종 필터"></span>
       <button class="xlsbtn" id="btnCopy" title="현재 필터가 적용된 전체 행을 헤더 포함해 복사합니다">⧉ 엑셀 복사</button>
+      <button class="xlsbtn" id="btnTemplate" title="업로드용 표준 엑셀 양식을 내려받습니다">⤓ 양식 다운로드</button>
       <button class="xlsbtn up" id="btnUpload" title="ERP에서 내려받은 엑셀(.xlsx) 또는 CSV를 올려 데이터를 갱신합니다">⬆ 엑셀 업로드</button>
       <input type="file" id="fileIn" accept=".xlsx,.csv" hidden>
     </span>
@@ -292,7 +296,8 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
   <div class="dzbox">
     <div class="dzicon">⬆</div>
     <div class="dzt">엑셀 파일을 여기에 놓으세요</div>
-    <div class="dzs">.xlsx · .csv — 품목코드 열이 있는 시트를 자동으로 인식합니다</div>
+    <div class="dzs">.xlsx · .csv — 품목코드 열이 있는 시트를 자동으로 인식합니다<br>
+      상자를 클릭해 파일을 선택할 수도 있습니다 · 닫기 Esc</div>
   </div>
 </div>
 
@@ -326,7 +331,8 @@ let DATA = [{"c":"00001","n":"금액조정","t":"무형상품","b":"","p":"","br
 const DEFAULTS = { q1:'', q2:'', brand:'', type:'제품', status:'운영', mis:false, dup:false,
                    limit:100, sort:'b', dir:-1 };   // 기본 정렬: 바코드 내림차순
 const S = { ...DEFAULTS, sel:null };
-const ORIGINAL = DATA;   // HTML에 내장된 원본 — 업로드 후 되돌리기용
+const ORIGINAL = DATA;   // HTML 내장 데이터 — DB 연결 실패 시 폴백용
+let booting = true;      // 첫 DB 응답 전에는 "없음" 대신 로딩 안내를 보여준다
 
 /* ---------- 파생 인덱스 (데이터 교체 시 재생성) ---------- */
 let byParent, byBarcode, byCode, brands;
@@ -462,7 +468,9 @@ function render() {
       <td class="spec">${r.g ? esc(r.g) : dash}</td>
       <td>${r.s ? `<span class="tag t-${r.s === '운영' ? 'on' : 'off'}">${esc(r.s)}</span>` : dash}</td>
     </tr>`).join('');
-  document.getElementById('noRes').hidden = rows.length > 0;
+  const nr = document.getElementById('noRes');
+  nr.textContent = booting ? 'DB에서 데이터를 불러오는 중…' : '조건에 맞는 SKU가 없습니다.';
+  nr.hidden = booting ? false : rows.length > 0;
   document.getElementById('moreBox').hidden = rows.length <= S.limit;
   document.getElementById('more').textContent = `더 보기 (${(rows.length - S.limit).toLocaleString()}건 남음)`;
   document.getElementById('lMis').classList.toggle('act', S.mis);
@@ -774,7 +782,16 @@ function toast(msg, isErr) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 3600);
 }
 
+function fmtStamp(iso) {
+  const d = new Date(iso), p = n => String(n).padStart(2, '0');
+  return `${String(d.getFullYear()).slice(2)}.${p(d.getMonth() + 1)}.${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function setUpdated(iso) {
+  document.getElementById('upd').textContent = iso ? `(업데이트일자 : ${fmtStamp(iso)})` : '';
+}
+
 function applyRecords(recs) {
+  booting = false;
   DATA = recs;
   Object.assign(S, DEFAULTS); S.sel = null;
   document.getElementById('q1').value = ''; document.getElementById('q2').value = '';
@@ -789,13 +806,15 @@ async function refreshFromDB(quiet) {
     if (!raws.length) throw new Error('DB가 비어 있습니다');
     applyRecords(deriveRecords(raws));
     const log = await sbLatestLog();
+    setUpdated(log && log.uploaded_at);
     showStatus('db', `DB 연결됨 · <b>${DATA.length.toLocaleString()}행</b>` +
-      (log ? ` · 최근 갱신 <b>${esc(log.file_name)}</b> (${new Date(log.uploaded_at).toLocaleString('ko-KR')})` : ''));
+      (log ? ` · 최근 갱신 <b>${esc(log.file_name)}</b>` : ''));
     if (!quiet) toast(`↻ DB에서 ${DATA.length.toLocaleString()}행 불러왔습니다`);
     return true;
   } catch (err) {
     // DB에 못 붙어도 화면은 비지 않도록 HTML 내장 데이터로 표시한다
     applyRecords(ORIGINAL);
+    setUpdated(null);
     showStatus('offline',
       `DB에 연결하지 못해 <b>내장 데이터 ${ORIGINAL.length.toLocaleString()}행</b>으로 표시 중입니다 — ${esc(err.message)}`);
     return false;
@@ -823,23 +842,134 @@ async function loadFile(file) {
 }
 
 document.getElementById('btnUpload').onclick = () => document.getElementById('fileIn').click();
-document.getElementById('fileIn').onchange = e => { const f = e.target.files[0]; if (f) loadFile(f); e.target.value = ''; };
+document.getElementById('fileIn').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  closeDropzone();
+  if (f) loadFile(f);
+};
 document.getElementById('btnRevert').onclick = () => refreshFromDB(false);
 
-/* --- 드래그앤드롭 --- */
+/* ================= 업로드 양식(.xlsx) 다운로드 =================
+   Supabase sku_master 의 8개 컬럼을 그대로 담는다. 라이브러리 없이 만들기 위해
+   압축하지 않는(STORED) ZIP 으로 xlsx 를 조립한다. */
+
+const CRC_TAB = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[i] = c >>> 0; }
+  return t;
+})();
+const crc32 = u8 => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TAB[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+
+function zipStore(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const nm = enc.encode(f.name), crc = crc32(f.data), len = f.data.length;
+    const lh = new Uint8Array(30 + nm.length), lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true); lv.setUint32(14, crc, true);
+    lv.setUint32(18, len, true); lv.setUint32(22, len, true);
+    lv.setUint16(26, nm.length, true);
+    lh.set(nm, 30);
+    parts.push(lh, f.data);
+
+    const ch = new Uint8Array(46 + nm.length), cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, len, true); cv.setUint32(24, len, true);
+    cv.setUint16(28, nm.length, true); cv.setUint32(42, offset, true);
+    ch.set(nm, 46);
+    central.push(ch);
+    offset += lh.length + len;
+  }
+  const cdSize = central.reduce((a, c) => a + c.length, 0);
+  const eo = new Uint8Array(22), ev = new DataView(eo.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, eo],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// 업로드 파서가 인식하는 머리글 = ERP 품목등록 시트와 동일한 이름
+const TEMPLATE_COLS = [
+  ['품목코드',  'sku_code',     '필수 · 중복 시 첫 행만 반영'],
+  ['바코드',    'barcode',      '13자리 등 · 텍스트로 입력'],
+  ['품목명',    'item_name',    ''],
+  ['품목구분',  'item_type',    '제품 / 원재료 / 부재료 / 무형상품 / 상품'],
+  ['규격정보',  'spec',         '치수·재질 등'],
+  ['사용',      'in_use',       'YES 또는 NO · 비우면 운영으로 처리'],
+  ['제조사',    'manufacturer', ''],
+  ['리드타임',  'lead_time',    '일(day) 단위'],
+];
+
+function buildTemplateXlsx() {
+  const enc = new TextEncoder();
+  const X = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const col = i => { let s = '', n = i + 1; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
+  const cell = (c, r, v, st) => `<c r="${col(c)}${r}" t="inlineStr" s="${st}"><is><t xml:space="preserve">${X(v)}</t></is></c>`;
+
+  // 안내문과 열 설명은 머리글 "위"에 둔다.
+  // 업로드 파서는 '품목코드'가 있는 행을 머리글로 잡고 그 아래만 데이터로 읽으므로,
+  // 위쪽 두 행은 지우지 않고 그대로 올려도 데이터로 섞이지 않는다.
+  const guide = '자민경 SKU Master 업로드 양식 — 3행 머리글은 수정하지 마세요. 4행부터 데이터를 입력합니다. (위 두 행은 지우지 않아도 됩니다)';
+  const rows = [
+    `<row r="1">${cell(0, 1, guide, 3)}</row>`,
+    `<row r="2">${TEMPLATE_COLS.map(([, , note], i) => cell(i, 2, note, 4)).join('')}</row>`,
+    `<row r="3">${TEMPLATE_COLS.map(([h], i) => cell(i, 3, h, 1)).join('')}</row>`,
+  ].join('');
+
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="${TEMPLATE_COLS.length}" width="22" style="2" customWidth="1"/></cols><sheetData>${rows}</sheetData></worksheet>`;
+
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="@"/></numFmts><fonts count="3"><font><sz val="11"/><name val="맑은 고딕"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font><font><sz val="10"/><color rgb="FF8B97A6"/><name val="맑은 고딕"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC04478"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="1" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="2" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs></styleSheet>`;
+
+  const files = [
+    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
+    ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="품목등록" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ['xl/styles.xml', styles],
+    ['xl/worksheets/sheet1.xml', sheet],
+  ].map(([name, xml]) => ({ name, data: enc.encode(xml) }));
+
+  return zipStore(files);
+}
+
+document.getElementById('btnTemplate').onclick = () => {
+  try {
+    const url = URL.createObjectURL(buildTemplateXlsx());
+    const a = document.createElement('a');
+    a.href = url; a.download = 'SKU_Master_업로드양식.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('⤓ 업로드 양식을 내려받았습니다');
+  } catch (err) {
+    toast('양식 생성 실패: ' + err.message, true);
+  }
+};
+
+/* --- 업로드 창: 우측 상단 로고 더블클릭으로 연다 ---
+   파일을 페이지에 끌어오는 것만으로 창이 뜨면 실수로 열리기 쉬워, 명시적인 동작으로 바꿨다. */
 const dz = document.getElementById('dropzone');
-let dragDepth = 0;
-addEventListener('dragenter', e => {
-  if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
-  e.preventDefault(); dragDepth++; dz.hidden = false;
-});
-addEventListener('dragover', e => { if (!dz.hidden) e.preventDefault(); });
-addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dz.hidden = true; } });
-addEventListener('drop', e => {
-  if (dz.hidden) return;
-  e.preventDefault(); dragDepth = 0; dz.hidden = true;
+function openDropzone()  { dz.hidden = false; }
+function closeDropzone() { dz.hidden = true; }
+
+document.getElementById('logo').ondblclick = openDropzone;
+dz.onclick = e => { if (e.target === dz) closeDropzone(); };
+dz.querySelector('.dzbox').onclick = () => document.getElementById('fileIn').click();
+addEventListener('keydown', e => { if (e.key === 'Escape' && !dz.hidden) closeDropzone(); });
+
+// 창이 열려 있을 때만 드롭을 받는다
+dz.addEventListener('dragover', e => e.preventDefault());
+dz.addEventListener('drop', e => {
+  e.preventDefault(); closeDropzone();
   const f = e.dataTransfer.files[0]; if (f) loadFile(f);
 });
+// 창 밖으로 떨어뜨렸을 때 브라우저가 파일을 열어버리지 않도록 막는다
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => e.preventDefault());
 
 /* ---------- 엑셀 복사 ---------- */
 const COLS = [
@@ -928,8 +1058,11 @@ document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
 });
 
 /* ---------- 시작 ---------- */
-rebuildAll();          // 내장 데이터로 먼저 그린다 (DB 응답을 기다리는 동안 빈 화면이 되지 않도록)
-refreshFromDB(true);   // 이어서 DB 데이터로 교체
+// 접속 시에는 항상 DB 데이터를 보여준다. 내장 데이터를 먼저 그리면 DB 값과 잠깐 어긋나 보이므로
+// 빈 상태 + 로딩 안내로 시작하고, 응답이 오면 그때 채운다. DB 실패 시에만 내장 데이터로 폴백한다.
+DATA = [];
+rebuildAll();
+refreshFromDB(true);
 </script>
 </body>
 </html>
