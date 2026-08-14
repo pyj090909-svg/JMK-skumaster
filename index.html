@@ -184,7 +184,11 @@ th:hover{background:var(--thbg-hi)}
 th .ar{opacity:.5;font-size:9px;margin-left:4px}
 th.srt{background:var(--thbg-hi)} th.srt .ar{opacity:1}
 td{padding:10px 12px;border-bottom:1px solid var(--bd);vertical-align:top}
-td:nth-child(4){white-space:nowrap;color:var(--tx2)}
+/* 바코드 병합(rowspan) 행에서는 셀 개수가 달라져 nth-child 가 다른 열을 가리킨다.
+   열 지정은 클래스로 한다. */
+td.col-brand{white-space:nowrap;color:var(--tx2)}
+/* 제품·상품은 상위 SKU 가 항상 비어 있어 해당 필터에서는 열 자체를 숨긴다 */
+table.hide-parent .col-parent{display:none}
 tbody tr{cursor:pointer}
 tbody tr:nth-child(even){background:var(--zebra)}
 tbody tr:hover{background:var(--ac-bg)}
@@ -293,7 +297,7 @@ footer{margin-top:22px;padding-top:14px;border-top:1px solid var(--bd);
         <th data-k="c">SKU코드<span class="ar">▼</span></th>
         <th data-k="n">품목명<span class="ar">▼</span></th>
         <th data-k="br">브랜드<span class="ar">▼</span></th>
-        <th data-k="pa">상위 SKU<span class="ar">▼</span></th>
+        <th data-k="pa" class="col-parent">상위 SKU<span class="ar">▼</span></th>
         <th data-k="mf">제조사<span class="ar">▼</span></th>
         <th data-k="lt">리드타임<span class="ar">▼</span></th>
         <th data-k="g">규격<span class="ar">▼</span></th>
@@ -460,8 +464,12 @@ function filtered() {
 
 const dash = '<span style="color:var(--tx3)">—</span>';
 
+// 제품·상품은 최상위 코드라 상위 SKU 가 존재하지 않는다
+const hidesParent = () => S.type === '제품' || S.type === '상품';
+
 function render() {
   const rows = filtered();
+  document.querySelector('table').classList.toggle('hide-parent', hidesParent());
   document.getElementById('cnt').textContent =
     `${rows.length.toLocaleString()}건${rows.length !== DATA.length ? ` / 전체 ${DATA.length.toLocaleString()}건` : ''}`;
   const show = rows.slice(0, S.limit);
@@ -487,8 +495,8 @@ function render() {
       }</td>`}
       <td class="mono">${esc(r.c)}${r.x ? '<span class="flag f-mis">정제</span>' : ''}</td>
       <td class="nm2" title="${esc(r.n)}"><span>${esc(r.n)}</span></td>
-      <td>${esc(r.br)}</td>
-      <td class="mono">${r.pa ? esc(r.pa) : dash}</td>
+      <td class="col-brand">${esc(r.br)}</td>
+      <td class="mono col-parent">${r.pa ? esc(r.pa) : dash}</td>
       <td>${r.mf ? esc(r.mf) : dash}</td>
       <td class="mono">${r.lt ? esc(r.lt) : dash}</td>
       <td class="spec">${r.g ? esc(r.g) : dash}</td>
@@ -1077,18 +1085,20 @@ const COLS = [
 async function copyTable() {
   const rows = filtered();
   const clean = v => String(v ?? '').replace(/[\t\r\n]/g, ' ');
+  // 화면에서 숨긴 열은 복사에서도 뺀다 (복사 = 보이는 그대로)
+  const cols = COLS.filter(c => !(hidesParent() && c[0] === '상위 SKU'));
 
   // 엑셀은 HTML 형식을 우선 인식한다. mso-number-format:'\@' 로 모든 셀을 텍스트로 고정해야
   // 13자리 바코드가 지수표기(8.80915E+12)로 바뀌거나 SKU코드 00001의 앞자리 0이 사라지지 않는다.
   const html =
-    '<table><thead><tr>' + COLS.map(c => `<th>${esc(c[0])}</th>`).join('') + '</tr></thead><tbody>' +
-    rows.map(r => '<tr>' + COLS.map(c =>
+    '<table><thead><tr>' + cols.map(c => `<th>${esc(c[0])}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c =>
       `<td style="mso-number-format:'\\@'">${esc(clean(c[1](r)))}</td>`).join('') + '</tr>').join('') +
     '</tbody></table>';
 
   // HTML을 못 받는 곳(메모장 등)을 위한 TSV 폴백
-  const tsv = [COLS.map(c => c[0]).join('\t')]
-    .concat(rows.map(r => COLS.map(c => clean(c[1](r))).join('\t'))).join('\r\n');
+  const tsv = [cols.map(c => c[0]).join('\t')]
+    .concat(rows.map(r => cols.map(c => clean(c[1](r))).join('\t'))).join('\r\n');
 
   try {
     if (!navigator.clipboard || !window.ClipboardItem) throw new Error('clipboard API 없음');
